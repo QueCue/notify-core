@@ -1,0 +1,25 @@
+{
+  "name": "@quecue/notify-core",
+  "version": "0.1.0",
+  "description": "独立的 Telegram 与飞书通讯、格式化和传输边界库",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/QueCue/notify-core.git" },
+  "homepage": "https://github.com/QueCue/notify-core#readme",
+  "bugs": { "url": "https://github.com/QueCue/notify-core/issues" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "README.md", "README.en.md", "SECURITY.md", "SECURITY.en.md", "CONTRIBUTING.md", "PUBLISHING.md", "CHANGELOG.md", "CHANGELOG.en.md", "LICENSE"],
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

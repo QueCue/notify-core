@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build/
+releases/
+*.tgz
+.env
+.env.*
+*.log
