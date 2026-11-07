@@ -1,6 +1,6 @@
 {
   "name": "@quecue/notify-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "独立的 Telegram 与飞书通讯、格式化和传输边界库",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/QueCue/notify-core.git" },
@@ -21,5 +21,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.76.0"
   }
 }

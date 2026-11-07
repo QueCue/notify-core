@@ -17,7 +17,7 @@ if (process.platform === 'win32') {
 const entry = path.join(consumer, 'node_modules/@quecue/notify-core/dist/index.js');
 const imported = await import(pathToFileURL(await realpath(entry)).href);
 for (const name of ['NotifyError', 'TransportError', 'HttpError', 'TelegramApiError', 'createChannels',
-  'createFormatting', 'createTransport', 'createTelegramApi', 'splitPlainText']) {
+  'createFormatting', 'createTransport', 'createTelegramApi', 'splitPlainText', 'createFeishuClient', 'FeishuError']) {
   if (typeof imported[name] !== 'function') throw new Error('公共 ESM 导出缺失。');
 }
 const example = path.join(consumer, 'example.mts');
@@ -28,6 +28,16 @@ const api = createTelegramApi('TEST_ONLY');
 const request = createTransport();
 const parts: string[] = splitPlainText('😀正文', 2);
 const error: Error = new NotifyError('安全摘要');
+import { createFeishuClient, FeishuError, type FeishuMessageEvent, type FeishuClient } from '@quecue/notify-core';
+const feishu: FeishuClient = createFeishuClient({ appId: 'cli_0123456789abcdef', appSecret: 'TEST_ONLY' }, {
+  onMessage: async (event: FeishuMessageEvent) => {
+    if (event.sender.sender_type === 'user') await feishu.replyMessage(event.message.message_id, {
+      msgType: 'text', content: JSON.stringify({ text: '离线类型检查' }), replyInThread: true,
+    });
+  },
+  onError: (error: FeishuError) => { const operation: string = error.operation; },
+});
+const state: string = feishu.state;
 `);
 execFileSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict',
   '--target', 'ES2022', '--module', 'NodeNext', example], { cwd: root, stdio: 'inherit' });
