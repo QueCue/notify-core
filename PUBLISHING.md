@@ -1,60 +1,61 @@
 # npm 发布流程
 
-本说明面向 [QueCue/notify-core](https://github.com/QueCue/notify-core) 维护者。源码公开与 npm 发布是独立操作；修改文件或推送普通分支不会自动发布 npm。
+本说明面向 [QueCue/notify-core](https://github.com/QueCue/notify-core) 维护者。正式 npm 发行使用本仓库的 [GitHub Actions 工作流](https://github.com/QueCue/notify-core/actions/workflows/publish-npm.yml)，不共享其他项目的发布身份。普通分支推送或版本标签推送均不会自动发布。
 
 ## 包和发布边界
 
-- 包名 `@quecue/notify-core`，MIT 许可证，公开 npm 包；package.json 配置公共 registry 和 `access: public`，不含 `private: true`。
-- 保留从 [dev-notify](https://github.com/QueCue/dev-notify) 提取代码的版权声明。没有第三方运行时依赖，开发工具由 package-lock 固定。
-- 当前不配置自动发布工作流或共享其他项目的发布身份。首次发布及后续版本需维护者明确认证和执行，不将 npm Token 放入仓库、命令行或聊天记录。
-- GitHub 私密漏洞报告和认证状态不能从本地配置推定；应根据实际设置完善 [SECURITY.md](SECURITY.md)。
+- 包名 `@quecue/notify-core`，MIT 许可证，公开 npm 包。保留从 [dev-notify](https://github.com/QueCue/dev-notify) 提取代码的版权声明。
+- 没有第三方运行时依赖；开发工具由 package-lock 固定。npm 包仅含 dist 运行时／类型、公开说明、package.json 和许可证，不含测试、CI 脚本或应用凭据。
+- GitHub Actions 使用托管 Ubuntu runner、Node.js 24 和 npm 11.21.0；只有正式发布任务拥有 `id-token: write`。不需要 `NPM_TOKEN`、`NODE_AUTH_TOKEN` secret 或本机 npm 登录。
+- GitHub 仓库公开、工作流存在和测试通过，都不能证明 npm 账户侧信任已配置，也不等于包已经发布。
 
-## 发行前检查
+## 首次建立 npm 包与信任
 
-1. 检查源码、Git 待提交文件、历史和生成包，避免包含 Token、Webhook、私聊内容、真实配置、本机路径或无关资料；忽略规则不会清除既有提交。
-2. 核对版本、CHANGELOG、中文／英文 README、API／类型声明、安全边界及仓库元数据。版本已存在且内容不同则必须换新版本，不能覆盖或重打旧标签。
-3. 执行：
+**npm 官方要求配置 Trusted Publisher 的包已经存在于 registry。** 尚不存在的包不能仅凭本工作流建立首次信任。账户所有者需先通过 npm 支持的认证流程初始化包，然后在该包的 npm 设置配置以下身份；不要把本机登录凭据或其他包的授权复制到 Actions。
 
-   ```sh
-   npm ci --ignore-scripts
-   npm test
-   npm pack --dry-run
-   node -e "require('node:fs').mkdirSync('releases', {recursive: true})"
-   npm pack --pack-destination releases
-   ```
+| 字段 | 值 |
+| --- | --- |
+| Provider | GitHub Actions |
+| Organization or user | `QueCue` |
+| Repository | `notify-core` |
+| Workflow filename | `publish-npm.yml`，不含目录 |
+| Environment | 留空，本工作流不使用 environment |
+| Publishing permission | 允许直接 `npm publish` |
 
-4. 检查 tarball 仅含 dist 运行时／类型、公开文档和许可证。在独立空项目安装这个已生成的包，验证 ESM 导入、TypeScript 类型及 README 离线示例；不要只依赖本仓库的 node_modules。
-5. 在发布前提交已检查源码，并核对 GitHub 版本标签对应的提交。测试通过不等于全部平台、代理和真实服务完成验收。
+阶段发布也是 npm 提供的初始化方式，但会产生公开的 `0.0.0-stage` 占位版本，并需账户认证和后续审核；本工作流不会擅自创建该额外版本。具体初始化操作应由维护者明确选择及执行。若首次已直接发布 `0.1.0`，Actions 不会覆盖它或把不同 tarball 当作同一次发行，应使用下一版本验证后续 OIDC 发行。
 
-## 首次及手动发布
+新建且尚未成功发布的信任配置会在两天后过期；请在包和工作流准备好后配置。成功发行会验证绑定，不能把它理解为所有已绑定配置每两天失效。本流程不自动改 dist-tag，不要求额外的标签管理权限。
 
-维护者通过 `npm login --registry=https://registry.npmjs.org/` 完成浏览器／二次认证，再用 `npm whoami` 核对账户。认证材料不应交给其他人代填。
+## 日常发行
 
-首次 0.1.0 的命令示例（后续版本应替换文件名）：
+1. 检查待公开源码、历史、版本、CHANGELOG、中英文 README 和安全说明，避免 Token、Webhook、真实配置、本机路径及无关内容。
+2. 修改 package.json 和 package-lock 的版本。npm 已有且内容不同的版本必须换版本，不覆盖或重打历史版本。
+3. 本地执行 `npm ci --ignore-scripts`、`npm test`。当前回归包含模拟网络的公共 API 测试及发行校验测试，不代表全部平台、代理或真实服务验收。
+4. 将已审核的源码、锁文件和工作流推送到 GitHub。进入 Actions → **Publish npm** → **Run workflow**，选择待发行分支或提交所在分支，填写与 package.json 完全一致的 `version`。
+5. 保持 `verify_only=true` 先运行验证：安装锁定依赖、编译、测试、生成 tarball、校验精确文件白名单／元数据／SHA512，再隔离安装同一个 tarball，核对 ESM 导出及 TypeScript 类型。下载 `npm-package` artifact 检查。
+6. 确认 npm 信任已建立且版本可发行后，对**同一提交**再次运行，设置 `verify_only=false`。正式运行会重新验证，并只上传本次验证任务保存的同一 tarball；不是直接上传之前某次运行或本机目录中的包。
 
-```sh
-npm publish releases/quecue-notify-core-0.1.0.tgz --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org/
-```
+工作流仅通过 `workflow_dispatch` 触发。正式版本映射 `latest`；`alpha.N`、`beta.N`、`rc.N` 映射对应预发布标签。不会让预发布额外覆盖 `latest`。手动表单通过环境变量传给脚本，不直接拼接到 shell。
 
-发布的是已经测试的 tarball，而不是临时重新构建另一份包。不要仅看到网络超时就重复上传；先只读查询目标版本。如果以后使用 Trusted Publishing，应为本包单独配置，不假定自动继承其他包的权限。
+## 发布与失败核验
 
-## 发布后核验
+- 正式任务核对下载包 SHA512，使用 OIDC 执行带 provenance 的 `npm publish`，再只读核对 registry 版本、integrity 和 dist-tag。
+- 包尚未初始化、查询失败或认证失败：停止，不回退到长期 Token，不借用其他仓库身份。
+- 已有版本仅在 SHA512 与本次包一致时跳过上传；不同内容立即停止，不能覆盖。构建环境或文档变化也可能产生不同 tarball。
+- 上传失败或结果未知不自动重发；先查询 registry。上传成功后版本可见性最多等待约 10 分钟，标签最多约 1 分钟；超时不能当作未发布。
+- 不自动修正既有标签。若版本已存在但标签不匹配，应由维护者核实影响后单独处理。
+- 测试或仅验证任务成功不表示发布成功。以正式发布任务结果和 registry 状态为准：
 
 ```sh
 npm view @quecue/notify-core@0.1.0 version dist.integrity --json --registry=https://registry.npmjs.org/
 npm view @quecue/notify-core dist-tags --json --registry=https://registry.npmjs.org/
 ```
 
-将 registry 的 `dist.integrity` 与本地 `npm pack --json` 结果比对，再从 registry 安装到独立项目验证。区分服务端接受、版本实际可见和标签更新；失败或结果未知时不盲目重发，不以本地文件存在证明已经发布。
+应用应声明正常的 npm 运行时依赖，如 `"@quecue/notify-core": "0.1.0"`，在版本可用后更新锁文件并回归；无需保存 vendor tarball、复制通讯运行时或检出兄弟仓库。
 
-正式发行通常使用 `latest`，预发布选用单独标签。0.x 同样需要说明破坏性 API 变化。
+## 官方参考
 
-## 应用升级
-
-应用应声明正常的 npm 运行时依赖，例如 `"@quecue/notify-core": "0.1.0"`，更新自己的锁文件并运行集成测试。用户安装应用时由 npm 自动处理依赖，不需要同时检出本仓库、保存 vendor tarball 或复制通讯运行时。
-
-官方参考：
-
+- [Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
+- [npm trust：包必须已存在的前置条件](https://docs.npmjs.com/cli/v11/commands/npm-trust/)
+- [阶段发布及首次包占位行为](https://docs.npmjs.com/staged-publishing/)
 - [npm publish](https://docs.npmjs.com/cli/v11/commands/npm-publish)
-- [npm pack](https://docs.npmjs.com/cli/v11/commands/npm-pack)
-- [Trusted Publishing](https://docs.npmjs.com/trusted-publishers)
