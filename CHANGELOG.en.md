@@ -2,6 +2,13 @@
 
 English | [简体中文](CHANGELOG.md)
 
+## 0.2.1
+
+- Add root-entry `FeishuClient.updateMessage(messageId, content): Promise<void>` to update app-sent card JSON by its original message ID using the official SDK's `im.v1.message.patch`. It creates no new message, changes no recipient and does not require a long connection.
+- Update success requires only `code === 0`, not `data.message_id`. Invalid arguments fail safely; platform rejection/exceptions use the new `update` operation on `FeishuError`, retaining only safe-integer codes with no automatic retry or fallback to sending/replying.
+- Make `FeishuAdapter.updateMessage` optional for legacy custom-adapter compatibility; missing update support fails safely. Keep SDK `1.76.0` without new dependencies; lazy loading, lifecycle, Webhook/`NotifyConfig` and HTTP limits remain unchanged.
+- Synchronize bilingual usage/security guidance and offline tests for success without `data`, redacted failures, no retries, SDK PATCH mapping and HTTP limits. Simulated automation is not real-Feishu or exhaustive environment acceptance.
+
 ## 0.2.0
 
 - Add a separate Feishu self-built app `createFeishuClient`: explicitly start WebSocket reception of `im.message.receive_v1`, with HTTP sending/replies and no card-action callbacks. Existing Webhook `makePlan`/`deliver` and `NotifyConfig` remain unchanged.

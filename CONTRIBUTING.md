@@ -11,7 +11,7 @@
 
 建议为限流、超时、格式回退、Unicode 分段、部分投递、自定义回调失败和错误脱敏补测试。保持默认导入及客户端创建无网络或配置副作用，SDK 懒加载。传输与授权的边界应写清楚，不要使用测试通过来替代真实平台兼容承诺。
 
-飞书客户端修改还应覆盖：实际 WS ready 才完成启动、默认 10000 毫秒启动超时／致命失败、重复启动幂等、同步停止取消待启动并禁用重连、停止后重启，以及 `idle`／`connecting`／`connected`／`reconnecting`／`failed`／`stopped` 状态。验证 SDK 原格式事件与 JSON 字符串 `content`、无需启动的 HTTP 发送／回复、`FeishuError` 的 operation／数值 code 和错误脱敏。消息回调须被 await，失败返回失败 ACK；`onError` 抛错／拒绝须隔离且不输出原日志。`stop()` 不等待或取消已执行的回调／HTTP 请求。
+飞书客户端修改还应覆盖：实际 WS ready 才完成启动、默认 10000 毫秒启动超时／致命失败、重复启动幂等、同步停止取消待启动并禁用重连、停止后重启，以及 `idle`／`connecting`／`connected`／`reconnecting`／`failed`／`stopped` 状态。验证 SDK 原格式事件与 JSON 字符串 `content`、无需启动的 HTTP 发送／回复／卡片更新、`FeishuError` 的 operation／数值 code 和错误脱敏。更新须固定映射 `im.v1.message.patch({path:{message_id},data:{content}})`，`code === 0` 即成功，不要求响应 `data`；覆盖参数校验、旧适配器缺少可选更新方法、安全失败及不重试／不降级发送。消息回调须被 await，失败返回失败 ACK；`onError` 抛错／拒绝须隔离且不输出原日志。`stop()` 不等待或取消已执行的回调／HTTP 请求。
 
 回调需在 3 秒内结束；去重、授权、防机器人自回复和耗时任务持久队列属于宿主，不承诺断线／重推恰好一次。现有 Webhook `makePlan`／`deliver` 与 `NotifyConfig` 保持不变，不扩展为卡片动作回调接收器。SDK HTTP 的 10 秒／1 MiB／禁重定向限制应单独验证，不要把 `createTransport` 的 JSON 响应保证套用到 WebSocket 帧。
 

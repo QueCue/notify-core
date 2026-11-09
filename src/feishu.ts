@@ -22,13 +22,14 @@ export interface FeishuSendMessage extends FeishuOutgoingMessage { receiveId: st
 export interface FeishuReplyMessage extends FeishuOutgoingMessage { replyInThread?: boolean }
 export interface FeishuMessageResult { messageId: string; chatId?: string }
 export type FeishuState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'stopped';
-export type FeishuOperation = 'configuration' | 'connection' | 'stopped' | 'send' | 'reply' | 'handler';
+export type FeishuOperation = 'configuration' | 'connection' | 'stopped' | 'send' | 'reply' | 'update' | 'handler';
 const errors: Record<FeishuOperation, string> = {
   configuration: '飞书应用客户端配置无效。',
   connection: '飞书长连接建立失败、超时或已终止。',
   stopped: '飞书长连接启动已取消。',
   send: '飞书消息发送失败，结果可能未知；不会自动重发。',
   reply: '飞书消息回复失败，结果可能未知；不会自动重发。',
+  update: '飞书卡片更新失败，结果可能未知；不会自动重试或重发。',
   handler: '飞书消息处理失败。',
 };
 export class FeishuError extends NotifyError {
@@ -51,6 +52,8 @@ export interface FeishuAdapter {
   close(): void;
   sendMessage(message: FeishuSendMessage): Promise<FeishuApiResponse>;
   replyMessage(messageId: string, message: FeishuReplyMessage): Promise<FeishuApiResponse>;
+  /** 可选以兼容旧适配器；缺失时客户端更新安全失败，不退回发送。 */
+  updateMessage?(messageId: string, content: string): Promise<FeishuApiResponse>;
 }
 export interface FeishuClientOptions {
   onMessage?: (event: FeishuMessageEvent) => void | Promise<void>;
@@ -65,6 +68,8 @@ export interface FeishuClient {
   stop(): void;
   sendMessage(message: FeishuSendMessage): Promise<FeishuMessageResult>;
   replyMessage(messageId: string, message: FeishuReplyMessage): Promise<FeishuMessageResult>;
+  /** 通过 HTTP 更新已发送卡片；content 为卡片 JSON 字符串，不改变接收人。 */
+  updateMessage(messageId: string, content: string): Promise<void>;
 }
 interface Session {
   promise: Promise<void>;
@@ -172,6 +177,16 @@ export function createFeishuClient(credentials: FeishuCredentials, options: Feis
       throw new FeishuError(operation, Number.isSafeInteger(response?.code) ? response.code : undefined);
     return { messageId: response.data.message_id, ...(nonempty(response.data.chat_id) ? { chatId: response.data.chat_id } : {}) };
   }
-  return { get state() { return state; }, start, stop,
+  async function updateMessage(messageId: string, content: string): Promise<void> {
+    if (!nonempty(messageId) || !nonempty(content)) throw new FeishuError('configuration');
+    let code: unknown;
+    try {
+      const value = await getAdapter();
+      const response = await value.updateMessage?.(messageId, content);
+      code = response?.code;
+    } catch { throw new FeishuError('update'); }
+    if (code !== 0) throw new FeishuError('update', typeof code === 'number' && Number.isSafeInteger(code) ? code : undefined);
+  }
+  return { get state() { return state; }, start, stop, updateMessage,
     sendMessage: message => send('send', message), replyMessage: (messageId, message) => send('reply', message, messageId) };
 }

@@ -2,6 +2,13 @@
 
 简体中文 | [English](CHANGELOG.en.md)
 
+## 0.2.1
+
+- 新增根入口 `FeishuClient.updateMessage(messageId, content): Promise<void>`，通过官方 SDK `im.v1.message.patch` 按原消息 ID 更新应用已发送的卡片 JSON；不重发新消息、不改变接收人，无需先启动长连接。
+- 更新成功只要求 `code === 0`，不要求 `data.message_id`；参数错误安全拒绝，平台拒绝／异常使用 `FeishuError` 的新 `update` 操作，仅保留安全整数错误码，不自动重试或降级发送／回复。
+- `FeishuAdapter.updateMessage` 为可选方法，兼容旧自定义适配器；缺少更新能力时安全失败。SDK 仍固定 `1.76.0`，未新增依赖；懒加载、生命周期、Webhook／`NotifyConfig` 和 HTTP 限制不变。
+- 同步中英文用法、安全边界及离线测试，覆盖无 `data` 成功、错误脱敏、不重试、SDK PATCH 映射和 HTTP 限制；自动化模拟不代表真实飞书或全环境验收。
+
 ## 0.2.0
 
 - 新增独立的飞书自建应用 `createFeishuClient`：显式启动 WebSocket 接收 `im.message.receive_v1`，通过 HTTP 发送／回复，不支持卡片动作回调；现有 Webhook `makePlan`／`deliver` 和 `NotifyConfig` 不变。

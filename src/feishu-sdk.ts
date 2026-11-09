@@ -46,5 +46,8 @@ export async function createFeishuSdkAdapter(credentials: FeishuCredentials,
           ...(message.replyInThread === undefined ? {} : { reply_in_thread: message.replyInThread }),
           ...(message.uuid === undefined ? {} : { uuid: message.uuid }) } });
     },
+    updateMessage(messageId, content) {
+      return client.im.v1.message.patch({ path: { message_id: messageId }, data: { content } });
+    },
   };
 }

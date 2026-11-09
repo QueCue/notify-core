@@ -10,6 +10,7 @@ globalThis.fetch = async () => { throw new Error('测试禁止真实网络'); };
 for (const transport of [http, https]) mock.method(transport, 'request', () => { throw new Error('测试禁止真实网络'); });
 const credentials = { appId: 'cli_0123456789abcdef', appSecret: 'FAKE_ONLY_SECRET' };
 const outgoing = { msgType: 'text', content: JSON.stringify({ text: '离线回复' }) };
+const card = JSON.stringify({ elements: [{ tag: 'markdown', content: '离线更新卡片' }] });
 const event = {
   event_id: 'ev_FAKE_ONLY', event_type: 'im.message.receive_v1',
   sender: { sender_id: { open_id: 'ou_FAKE_ONLY' }, sender_type: 'user' },
@@ -18,17 +19,18 @@ const event = {
 };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture(options = {}) {
-  const handlers = [], sends = [], replies = [], errors = [], events = [];
+  const handlers = [], sends = [], replies = [], updates = [], errors = [], events = [];
   let factories = 0, closes = 0;
   const adapter = {
     start(callbacks) { handlers.push(callbacks); },
     close() { closes++; },
     async sendMessage(message) { sends.push(message); return { code: 0, data: { message_id: 'om_sent', chat_id: 'oc_FAKE_ONLY' } }; },
     async replyMessage(messageId, message) { replies.push({ messageId, message }); return { code: 0, data: { message_id: 'om_replied' } }; },
+    async updateMessage(messageId, content) { updates.push({ messageId, content }); return { code: 0 }; },
   };
   const client = createFeishuClient(credentials, { onMessage: data => { events.push(data); },
     onError: error => { errors.push(error); }, adapterFactory: () => { factories++; return adapter; }, ...options });
-  return { client, adapter, handlers, sends, replies, errors, events,
+  return { client, adapter, handlers, sends, replies, updates, errors, events,
     get factories() { return factories; }, get closes() { return closes; } };
 }
 async function connect(f) {
@@ -300,6 +302,106 @@ test('飞书发送参数无效时不初始化SDK也不发送', async () => {
   assert.equal(f.factories, 0);
 });
 
+test('飞书更新参数在本地校验且安全失败，不初始化适配器', async () => {
+  const f = fixture();
+  for (const invalid of [undefined, null, '', ' \t\n', 1, true, {}, ['FAKE_ONLY_SECRET']]) {
+    await assert.rejects(f.client.updateMessage(invalid, card), safe('configuration'));
+    await assert.rejects(f.client.updateMessage('om_FAKE_ONLY', invalid), safe('configuration'));
+  }
+  assert.equal(f.factories, 0);
+  assert.deepEqual(f.updates, []);
+  assert.deepEqual(f.sends, []);
+  assert.deepEqual(f.replies, []);
+});
+
+test('飞书更新惰性初始化且无需长连接，code为0无需data或消息ID，原样透传', async () => {
+  const f = fixture({ onMessage: undefined });
+  assert.equal(f.factories, 0);
+  assert.equal(await f.client.updateMessage('om_FAKE_ONLY', card), undefined);
+  assert.deepEqual(f.updates, [{ messageId: 'om_FAKE_ONLY', content: card }]);
+  const content = `  ${card}\n`;
+  f.adapter.updateMessage = async (messageId, value) => {
+    assert.equal(messageId, 'om_FAKE_ONLY');
+    assert.equal(value, content);
+    return { code: 0, data: {} };
+  };
+  assert.equal(await f.client.updateMessage('om_FAKE_ONLY', content), undefined);
+  assert.equal(f.factories, 1);
+  assert.equal(f.handlers.length, 0);
+  assert.equal(f.client.state, 'idle');
+  assert.deepEqual(f.sends, []);
+  assert.deepEqual(f.replies, []);
+});
+
+test('飞书旧适配器缺少更新方法时安全失败，不降级重发，发送和回复仍可用', async () => {
+  const f = fixture();
+  delete f.adapter.updateMessage;
+  await assert.rejects(f.client.updateMessage('om_FAKE_ONLY', card), safe('update'));
+  assert.deepEqual(f.sends, []);
+  assert.deepEqual(f.replies, []);
+  assert.deepEqual(await f.client.sendMessage({ ...outgoing, receiveId: 'oc_FAKE_ONLY' }),
+    { messageId: 'om_sent', chatId: 'oc_FAKE_ONLY' });
+  assert.deepEqual(await f.client.replyMessage('om_FAKE_ONLY', outgoing), { messageId: 'om_replied' });
+  assert.equal(f.factories, 1);
+});
+
+test('飞书更新业务失败仅暴露安全整数错误码，畸形响应不泄密也不重试', async () => {
+  const f = fixture();
+  let calls = 0;
+  for (const code of [99991663, 429, undefined, 'FAKE_ONLY_SECRET', '0', NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    f.adapter.updateMessage = async () => { calls++; return { code, msg: 'FAKE_ONLY_SECRET', data: { message_id: 'om_rejected' } }; };
+    await assert.rejects(f.client.updateMessage('om_FAKE_ONLY', card), error =>
+      safe('update')(error) && error.code === (Number.isSafeInteger(code) ? code : undefined));
+  }
+  for (const response of [undefined, null, {}, { get code() { throw new Error('FAKE_ONLY_SECRET'); } }]) {
+    f.adapter.updateMessage = async () => { calls++; return response; };
+    await assert.rejects(f.client.updateMessage('om_FAKE_ONLY', card), safe('update'));
+  }
+  assert.equal(calls, 13);
+  assert.deepEqual(f.sends, []);
+  assert.deepEqual(f.replies, []);
+  assert.equal(f.client.state, 'idle');
+});
+
+test('飞书更新同步异常、网络结果未知和工厂异常安全失败且不自动重试', async () => {
+  const f = fixture();
+  let calls = 0;
+  for (const updateMessage of [() => { calls++; throw new Error('FAKE_ONLY_SECRET'); },
+    async () => { calls++; throw new Error('FAKE_ONLY_SECRET'); }]) {
+    f.adapter.updateMessage = updateMessage;
+    await assert.rejects(f.client.updateMessage('om_FAKE_ONLY', card), safe('update'));
+  }
+  assert.equal(calls, 2);
+  let factories = 0;
+  const failed = fixture({ adapterFactory: () => { factories++; throw new Error('FAKE_ONLY_SECRET'); } });
+  await assert.rejects(failed.client.updateMessage('om_FAKE_ONLY', card), safe('update'));
+  assert.equal(factories, 1);
+  assert.deepEqual(f.sends, []);
+  assert.deepEqual(f.replies, []);
+});
+
+test('飞书更新不改变长连接状态，stop不取消进行中的更新，停止后仍可HTTP更新', async () => {
+  const f = fixture();
+  await connect(f);
+  await f.client.updateMessage('om_FAKE_ONLY', card);
+  assert.equal(f.client.state, 'connected');
+  assert.equal(f.handlers.length, 1);
+  let finish;
+  f.adapter.updateMessage = () => new Promise(resolve => { finish = resolve; });
+  const pending = f.client.updateMessage('om_FAKE_ONLY', card);
+  await flush();
+  f.client.stop();
+  finish({ code: 0 });
+  assert.equal(await pending, undefined);
+  assert.equal(f.client.state, 'stopped');
+  f.adapter.updateMessage = async () => ({ code: 0 });
+  await f.client.updateMessage('om_FAKE_ONLY', card);
+  assert.equal(f.client.state, 'stopped');
+  assert.equal(f.factories, 1);
+  assert.equal(f.handlers.length, 1);
+  assert.equal(f.closes, 1);
+});
+
 function sdkFixture() {
   const clients = [], sockets = [], dispatchers = [], httpConfigs = [], responses = [], requests = [], requestInterceptors = [];
   const sdk = {
@@ -315,6 +417,7 @@ function sdkFixture() {
         this.im = { v1: { message: {
           create: async payload => { requests.push(['create', payload]); return { code: 0, data: { message_id: 'om_sent' } }; },
           reply: async payload => { requests.push(['reply', payload]); return { code: 0, data: { message_id: 'om_replied' } }; },
+          patch: async payload => { requests.push(['patch', payload]); return { code: 0 }; },
         } } };
       }
     },
@@ -369,15 +472,17 @@ test('飞书SDK适配器注册消息事件，透传生命周期并强制关闭�
   adapter.close();
 });
 
-test('真实飞书SDK在离线HTTP适配器下获取token、发送和回复，复用内存token', async () => {
+test('真实飞书SDK离线获取token、发送、回复和PATCH卡片，复用token并保留HTTP限制', async () => {
   const sdk = await import('@larksuiteoapi/node-sdk');
   const requests = [];
   const adapter = await createFeishuSdkAdapter(credentials, async () => ({ ...sdk,
     defaultHttpInstance: { create: config => sdk.defaultHttpInstance.create({ ...config,
       adapter: async request => {
-        requests.push({ url: request.url, params: request.params, headers: request.headers, data: JSON.parse(request.data) });
+        requests.push({ url: request.url, method: request.method, params: request.params, headers: request.headers,
+          data: JSON.parse(request.data), timeout: request.timeout, maxRedirects: request.maxRedirects,
+          maxContentLength: request.maxContentLength, maxBodyLength: request.maxBodyLength });
         const data = request.url.includes('tenant_access_token') ?
-          { code: 0, expire: 7200, tenant_access_token: 'FAKE_ONLY_TENANT_TOKEN' } :
+          { code: 0, expire: 7200, tenant_access_token: 'FAKE_ONLY_TENANT_TOKEN' } : request.method === 'patch' ? { code: 0 } :
           { code: 0, data: { message_id: 'om_sdk_result', chat_id: 'oc_FAKE_ONLY' } };
         return { data, status: 200, statusText: 'OK', headers: {}, config: request };
       },
@@ -386,7 +491,10 @@ test('真实飞书SDK在离线HTTP适配器下获取token、发送和回复，�
   assert.equal(requests.length, 0);
   await adapter.sendMessage({ ...outgoing, receiveId: 'oc_FAKE_ONLY' });
   await adapter.replyMessage('om_FAKE_ONLY', outgoing);
-  assert.equal(requests.length, 3);
+  const client = createFeishuClient(credentials, { adapterFactory: () => adapter });
+  assert.equal(await client.updateMessage('om_FAKE_ONLY', card), undefined);
+  assert.equal(client.state, 'idle');
+  assert.equal(requests.length, 4);
   assert.equal(requests[0].url, 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal');
   assert.deepEqual(requests[0].data, { app_id: credentials.appId, app_secret: credentials.appSecret });
   assert.equal(requests[1].url, 'https://open.feishu.cn/open-apis/im/v1/messages');
@@ -394,6 +502,15 @@ test('真实飞书SDK在离线HTTP适配器下获取token、发送和回复，�
   assert.equal(requests[1].headers.Authorization, 'Bearer FAKE_ONLY_TENANT_TOKEN');
   assert.equal(requests[2].url, 'https://open.feishu.cn/open-apis/im/v1/messages/om_FAKE_ONLY/reply');
   assert.deepEqual(requests[2].data, { msg_type: 'text', content: outgoing.content });
+  assert.equal(requests[3].method, 'patch');
+  assert.equal(requests[3].url, 'https://open.feishu.cn/open-apis/im/v1/messages/om_FAKE_ONLY');
+  assert.deepEqual(requests[3].data, { content: card });
+  assert.deepEqual(requests[3].params, {});
+  assert.equal(requests[3].headers.Authorization, 'Bearer FAKE_ONLY_TENANT_TOKEN');
+  assert.equal(requests[3].timeout, 10000);
+  assert.equal(requests[3].maxRedirects, 0);
+  assert.equal(requests[3].maxContentLength, 1024 * 1024);
+  assert.equal(requests[3].maxBodyLength, 1024 * 1024);
 });
 
 test('飞书SDK适配器正确映射接收人、回复ID、线程与去重uuid，不混用Webhook格式', async () => {
@@ -402,9 +519,11 @@ test('飞书SDK适配器正确映射接收人、回复ID、线程与去重uuid�
   await adapter.sendMessage({ ...outgoing, receiveId: 'oc_FAKE_ONLY' });
   await adapter.sendMessage({ ...outgoing, receiveId: 'ou_FAKE_ONLY', receiveIdType: 'open_id', uuid: 'FAKE_ONLY_UUID' });
   await adapter.replyMessage('om_FAKE_ONLY', { ...outgoing, replyInThread: false, uuid: 'FAKE_ONLY_UUID' });
+  assert.deepEqual(await adapter.updateMessage('om_FAKE_ONLY', card), { code: 0 });
   assert.deepEqual(f.requests, [
     ['create', { params: { receive_id_type: 'chat_id' }, data: { receive_id: 'oc_FAKE_ONLY', msg_type: 'text', content: outgoing.content } }],
     ['create', { params: { receive_id_type: 'open_id' }, data: { receive_id: 'ou_FAKE_ONLY', msg_type: 'text', content: outgoing.content, uuid: 'FAKE_ONLY_UUID' } }],
     ['reply', { path: { message_id: 'om_FAKE_ONLY' }, data: { msg_type: 'text', content: outgoing.content, reply_in_thread: false, uuid: 'FAKE_ONLY_UUID' } }],
+    ['patch', { path: { message_id: 'om_FAKE_ONLY' }, data: { content: card } }],
   ]);
 });

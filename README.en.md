@@ -8,16 +8,16 @@ Originally extracted from [dev-notify](https://github.com/QueCue/dev-notify) and
 
 - ESM with TypeScript declarations; Node.js 22 or later.
 - Webhook/Telegram transport uses built-in `fetch` and `crypto`; the Feishu client adds the official MIT-licensed `@larksuiteoapi/node-sdk`, pinned to `1.76.0` as a runtime dependency.
-- Telegram sending and selected query/button APIs; Feishu custom-bot Webhook sending plus self-built app WebSocket message reception and HTTP sending/replies; **no card-action callbacks**.
+- Telegram sending and selected query/button APIs; Feishu custom-bot Webhook sending plus self-built app WebSocket message reception and HTTP sending/replies/card updates; **no card-action callbacks**.
 - No credential discovery from environment variables, application configuration or keyrings, and no automatic polling or long connections. Importing and creating a Feishu client are offline; the SDK is lazy-loaded, and reception requires an explicit `start()`.
 
 ## Status and installation
 
-MIT-licensed source; npm package name: `@quecue/notify-core`. The Feishu self-built app client below is available starting with `0.2.0`; see the [changelog](CHANGELOG.en.md). The registry is authoritative for available versions:
+MIT-licensed source; npm package name: `@quecue/notify-core`. The Feishu self-built app client below starts with `0.2.0`; `0.2.1` adds updates to existing cards. See the [changelog](CHANGELOG.en.md). The registry is authoritative for available versions:
 
 ```sh
 npm view @quecue/notify-core version --registry=https://registry.npmjs.org/
-npm install @quecue/notify-core@0.2.0
+npm install @quecue/notify-core@0.2.1
 ```
 
 Applications can declare it as a normal runtime dependency. npm installs it automatically, without a source checkout, vendor archive or embedded copy. Import the ESM API and declarations through `@quecue/notify-core`.
@@ -34,7 +34,7 @@ npm pack --pack-destination releases
 Install the generated file in your own Node.js application, replacing the path:
 
 ```sh
-npm install /path/to/quecue-notify-core-0.2.0.tgz
+npm install /path/to/quecue-notify-core-0.2.1.tgz
 ```
 
 No other project needs to be checked out. Use the declared ESM entry; CommonJS `require()` and browser compatibility are not guaranteed.
@@ -99,7 +99,7 @@ console.log(result.ok); // true; the injected transport performs no real request
 | `splitPlainText(text, limit = 4000)` | UTF-16-unit budget without splitting surrogate pairs; not grapheme-cluster or atomic-delivery protection |
 | `createTransport(options?)` | Defaults to a 10-second timeout, 1 MiB response limit, no redirects, strict UTF-8 and JSON-object checks; supports an injected fetcher |
 | `createTelegramApi(token, options?)` | Selected API methods, without a polling loop, offset persistence or authorization |
-| `createFeishuClient({appId,appSecret}, options)` | Synchronously creates a self-built app client; explicit `start()` receives messages, while `sendMessage`/`replyMessage` use HTTP |
+| `createFeishuClient({appId,appSecret}, options)` | Synchronously creates a self-built app client; explicit `start()` receives messages, while `sendMessage`/`replyMessage`/`updateMessage` use HTTP |
 
 Markdown supports readable headings, quotations, lists, emphasis, code and tables. Link addresses remain visible. Telegram parse rejection can fall back to plain text; Feishu can retry using compatible card components. Metadata that cannot fit safely is rejected instead of silently truncated.
 
@@ -125,7 +125,7 @@ Allowed methods: `sendMessage`, `editMessageReplyMarkup`, `answerCallbackQuery`,
 
 ### Feishu self-built apps: WebSocket reception and HTTP replies
 
-This client is separate from existing Webhook `makePlan`/`deliver`; `NotifyConfig` is unchanged. **Only self-built apps support long connections; custom-bot Webhook URLs and secrets cannot receive events.** WebSocket receives only `im.message.receive_v1` message events; sends/replies use HTTP APIs. Card-action callbacks are unsupported, and the host does not need a public callback endpoint.
+This client is separate from existing Webhook `makePlan`/`deliver`; `NotifyConfig` is unchanged. **Only self-built apps support long connections; custom-bot Webhook URLs and secrets cannot receive events.** WebSocket receives only `im.message.receive_v1` message events; sends/replies/card updates use HTTP APIs. Card-action callbacks are unsupported, and the host does not need a public callback endpoint.
 
 Configure the app in the Feishu developer console first:
 
@@ -190,6 +190,29 @@ const sent = await client.sendMessage({
 
 `client.replyMessage(messageId, {msgType, content, replyInThread?, uuid?})` also returns `{messageId,chatId?}`; `content` is a JSON string for the selected message type. Neither method uses message planning or automatic splitting.
 
+#### Update an existing card (since 0.2.1)
+
+`client.updateMessage(messageId: string, content: string): Promise<void>` updates a card by its original message ID without requiring `start()`; calling it makes an HTTP request directly. For example, save the `messageId` returned by sending and later update that same card:
+
+```js
+const cardMessage = await client.sendMessage({
+  receiveId: 'oc_EXAMPLE', // Replace with a host-validated recipient.
+  msgType: 'interactive',
+  content: JSON.stringify({ elements: [{ tag: 'markdown', content: 'Processing' }] }),
+});
+await client.updateMessage(cardMessage.messageId, JSON.stringify({
+  elements: [{ tag: 'markdown', content: 'Completed' }],
+})); // Resolves to undefined; no new message and no recipient changes.
+```
+
+- Always calls the official SDK's `im.v1.message.patch({path:{message_id},data:{content}})`. `content` is a card JSON string, not a Webhook `{msg_type,card}` wrapper; do not supply `msgType`, a recipient or `uuid`.
+- Only for app-sent cards that the platform allows updating, not ordinary text editing or receiving card-action callbacks. Feishu controls ownership, permissions, update windows and card-format limits; hosts must authorize access and retain the correct message ID.
+- Local validation only checks that `messageId`/`content` are non-blank strings; it does not parse or validate the card schema, and strings pass through unchanged. Invalid arguments reject with a safe `FeishuError('configuration')`. Success requires only `code === 0`, not `data` or a new message ID.
+- Platform rejection, unknown network outcomes or an adapter without update support reject with a safe `FeishuError` whose `operation === 'update'`, retaining only an optional safe-integer `code`. No automatic retry or fallback to sending/replying. Check the original message state rather than blindly resending a card after a timeout.
+- Custom `FeishuAdapter` implementations may optionally add `updateMessage?(messageId, content): Promise<FeishuApiResponse>`. Existing adapters remain compatible but updating safely fails when absent; the default SDK adapter implements it. Lifecycle and HTTP limits are unchanged, and `stop()` does not cancel an update already in progress.
+
+Reference: [Feishu update app-sent message cards](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/patch).
+
 The official MIT-licensed `@larksuiteoapi/node-sdk@1.76.0` handles app tokens, the binary protocol, framing, heartbeats and reconnection; SDK logging is disabled by default. SDK HTTP is independently configured with a 10-second timeout, 1 MiB limit and no redirects. **WebSocket frames are not covered by `createTransport`'s 1 MiB JSON-response guarantee**, nor do they use its `request`/`fetcher` injection.
 
 Reference: [official SDK WebSocket event reception](https://github.com/larksuite/node-sdk#receive-events-by-websocket-connection).
@@ -198,7 +221,7 @@ Reference: [official SDK WebSocket event reception](https://github.com/larksuite
 
 - Built-in transport-generated safe errors omit original URLs, response bodies and underlying network exception text. `NotifyError` is the base class for `TransportError`, `HttpError`, `TelegramApiError` and `FeishuError`. Custom translators, transports and callback-owned output are outside this guarantee and must be sanitized by the caller.
 - `HttpError.status` describes an already-parsed HTTP failure. Invalid JSON or UTF-8 may first produce `TransportError`; not every HTTP 401 is guaranteed to become the same error type.
-- `FeishuError extends NotifyError`: `operation` is `configuration`, `connection`, `stopped`, `send`, `reply` or `handler`; optional `code` is numeric. Generated errors omit SDK text. Handler failures are wrapped as safe errors rather than forwarding the original callback exception to the SDK or `onError`.
+- `FeishuError extends NotifyError`: `operation` is `configuration`, `connection`, `stopped`, `send`, `reply`, `update` or `handler`; optional `code` is numeric. Generated errors omit SDK text. Handler failures are wrapped as safe errors rather than forwarding the original callback exception to the SDK or `onError`.
 - `TelegramApiError` has `code`, `retryAfterSeconds` and `fatal`. `fatal` is true only for 401/404/409 and does not terminate the host process.
 - `createTelegramApi` retries a 429 at most once within its default 60-second wait threshold. Set `maxRateLimitWaitSeconds: 0` to disable this internal wait. Other network failures are not automatically resent.
 - `deliver` has separate handling for valid Telegram 429 waits up to 60 seconds, format fallback for the current part, and 250 ms spacing between successful Feishu parts. Combined fallback paths do not imply a two-request maximum for the whole operation.

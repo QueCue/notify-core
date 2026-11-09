@@ -6,7 +6,7 @@
 
 ## 数据与网络
 
-- 导入库及创建飞书客户端不会联网，也不会读取应用配置、环境凭据或系统凭据库。显式投递／API 调用才发送内容；飞书 `start()` 主动联网接收，`sendMessage`／`replyMessage` 无需先启动即可通过 HTTP 发送。外部平台的数据保留规则不由本库控制。
+- 导入库及创建飞书客户端不会联网，也不会读取应用配置、环境凭据或系统凭据库。显式投递／API 调用才发送内容；飞书 `start()` 主动联网接收，`sendMessage`／`replyMessage`／`updateMessage` 无需先启动即可通过 HTTP 发送／更新。外部平台的数据保留规则不由本库控制。
 - Telegram API 工厂固定官方 HTTPS 基址并限制方法；通用 JSON 传输和飞书 Webhook 配置并不构成 URL 访问控制。宿主必须验证协议、目的地域名、接收人以及跳转链接，不能将外部不可信 URL 直接交给传输。
 - 默认传输保留运行时 TLS 验证，禁止重定向，默认超时 10 秒、响应最多 1 MiB，严格检查 UTF-8 和 JSON 对象。限制可配置；降低保护或替换传输后的安全性由宿主承担。
 - 飞书客户端新增固定版本 `1.76.0` 的官方 MIT 许可运行时依赖 `@larksuiteoapi/node-sdk`，懒加载并由其管理应用 token、二进制协议、分帧、心跳和重连。SDK HTTP 独立配置 10 秒超时、1 MiB 上限及禁止重定向；**SDK WebSocket 帧不受 `createTransport` 的 1 MiB JSON 响应保证约束**，不能将该保证推广到所有 SDK 流量。
@@ -25,9 +25,11 @@
 ## 重试与状态
 
 - 网络超时可能发生在服务端已接受消息之后；投递可能未知，不保证恰好一次或长消息原子发送。
+- 飞书 `updateMessage(messageId, content)` 固定通过官方 SDK `im.v1.message.patch` 更新原卡片，不创建新消息或改变接收人；无需启动长连接，不自动重试或降级为发送／回复。结果未知时须先核实原消息，盲目重发可能重复通知或覆盖较新的卡片状态。
+- 更新只校验消息 ID／卡片 JSON 字符串非空白，不验证卡片 schema、消息归属或宿主授权；权限、可更新时限和格式限制由平台执行。宿主须授权更新目标，不能将任意入站消息 ID 当成更新许可。成功以 `code === 0` 为准，不需要响应 `data` 或消息 ID；错误仅保留安全整数 `code?`。旧自定义适配器缺少可选更新方法时安全失败，不回退到真实 SDK 或重新发送。
 - 明确的限流和格式兼容拒绝可能触发有界重试／回退；它们不允许宿主重复执行有副作用的业务操作。
 - `onSent` 在成功发送后调用，其失败不能撤销已投递消息。不要因为 `ok:false` 就不加区分地重发整个计划。
-- 飞书 `onMessage` 被 await，须在 3 秒内结束；失败先安全报告 `onError`，再抛安全错误使 SDK 返回失败 ACK，可能触发重推。`FeishuError extends NotifyError`，`operation` 区分 `configuration`／`connection`／`stopped`／`send`／`reply`／`handler`，`code?` 为数值，不携带 SDK 原文。`onError` 自身抛错／拒绝会被隔离，默认不输出 SDK 日志或回调原异常；宿主日志仍须自行脱敏。
+- 飞书 `onMessage` 被 await，须在 3 秒内结束；失败先安全报告 `onError`，再抛安全错误使 SDK 返回失败 ACK，可能触发重推。`FeishuError extends NotifyError`，`operation` 区分 `configuration`／`connection`／`stopped`／`send`／`reply`／`update`／`handler`，`code?` 为数值，不携带 SDK 原文。`onError` 自身抛错／拒绝会被隔离，默认不输出 SDK 日志或回调原异常；宿主日志仍须自行脱敏。
 - 飞书启动默认等待实际 WS ready 最多 10000 毫秒；超时／致命错误拒绝，重复启动幂等。同步 `stop()` 关闭长连、禁用重连并拒绝正在等待的启动，之后可重启；不等待或取消已执行中的回调／HTTP 请求，不能作为撤销业务操作的保证。
 - 库不持久保存队列、Token、消息正文、offset 或日志。应用自己的存储、日志、备份、权限和更新机制需单独评估。
 

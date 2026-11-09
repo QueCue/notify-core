@@ -8,16 +8,16 @@
 
 - ESM，提供 TypeScript 类型，要求 Node.js 22 或更新版本。
 - Webhook／Telegram 传输使用 Node 内置 `fetch` 和 `crypto`；飞书客户端新增官方 MIT 许可 SDK `@larksuiteoapi/node-sdk`，运行时依赖固定为 `1.76.0`。
-- Telegram：发送消息，以及有限的查询／按钮 API；飞书：自定义机器人 Webhook 发送，以及自建应用 WebSocket 收消息、HTTP API 发送／回复；**不支持卡片动作回调**。
+- Telegram：发送消息，以及有限的查询／按钮 API；飞书：自定义机器人 Webhook 发送，以及自建应用 WebSocket 收消息、HTTP API 发送／回复／卡片更新；**不支持卡片动作回调**。
 - 不读取环境变量或配置文件来取得凭据，不访问系统凭据库，不自动启动轮询或长连接。导入和创建飞书客户端均不联网，SDK 懒加载；显式 `start()` 才启动接收。
 
 ## 当前状态与安装
 
-源码使用 MIT 许可证，npm 包名为 `@quecue/notify-core`。从 `0.2.0` 起提供下述飞书自建应用客户端，版本变化见[变更记录](CHANGELOG.md)。实际可用版本以 registry 为准：
+源码使用 MIT 许可证，npm 包名为 `@quecue/notify-core`。从 `0.2.0` 起提供下述飞书自建应用客户端，`0.2.1` 新增已发送卡片更新，版本变化见[变更记录](CHANGELOG.md)。实际可用版本以 registry 为准：
 
 ```sh
 npm view @quecue/notify-core version --registry=https://registry.npmjs.org/
-npm install @quecue/notify-core@0.2.0
+npm install @quecue/notify-core@0.2.1
 ```
 
 应用可将它声明为普通运行时依赖，npm 会自动安装，不需要用户检出本仓库、复制 vendor 包或手工嵌入通讯源码。ESM／类型入口均通过 `@quecue/notify-core` 导入。
@@ -34,7 +34,7 @@ npm pack --pack-destination releases
 在你的 Node.js 项目中安装生成的文件（将路径换为实际位置）：
 
 ```sh
-npm install /path/to/quecue-notify-core-0.2.0.tgz
+npm install /path/to/quecue-notify-core-0.2.1.tgz
 ```
 
 `npm ci` 需要完整源码检出，包括锁文件；不需要同时检出其他项目。运行时只支持本包声明的 ESM 入口，不保证 `require()` 或浏览器环境兼容性。
@@ -99,7 +99,7 @@ console.log(result.ok); // true；使用注入传输，没有真实发送。
 | `splitPlainText(text, limit = 4000)` | 按 UTF-16 单元预算分段，不切断代理对；保持正文，不保证不拆开组合字形或整条消息原子投递 |
 | `createTransport(options?)` | 10 秒超时、1 MiB 响应上限、禁止重定向、严格 UTF-8／JSON 对象检查；返回可注入 `fetcher` 的请求函数 |
 | `createTelegramApi(token, options?)` | 固定 Telegram 方法集合，不启动轮询、不持久化 offset、不提供身份授权 |
-| `createFeishuClient({appId,appSecret}, options)` | 同步创建自建应用客户端；显式 `start()` 接收消息，`sendMessage`／`replyMessage` 通过 HTTP 发送 |
+| `createFeishuClient({appId,appSecret}, options)` | 同步创建自建应用客户端；显式 `start()` 接收消息，`sendMessage`／`replyMessage`／`updateMessage` 通过 HTTP 发送／更新 |
 
 Markdown 支持标题、引用、列表、内联强调、代码和表格的可读渲染，链接地址保留在可见文字中。Telegram 解析失败可回退纯文本；飞书卡片组件被拒绝时可尝试兼容组件。过长标题／footer 等不能安全分段时明确失败，不悄悄截断。
 
@@ -125,7 +125,7 @@ const api = createTelegramApi(process.env.TELEGRAM_BOT_TOKEN ?? '', {
 
 ### 飞书自建应用：长连接接收与 HTTP 回复
 
-此入口独立于现有 Webhook `makePlan`／`deliver`，`NotifyConfig` 不变。**只有自建应用支持长连接；自定义机器人 Webhook 地址和 `secret` 不能用于接收。** WebSocket 仅接收 `im.message.receive_v1` 消息事件，发送／回复走 HTTP API，不支持卡片动作回调，也不需要宿主提供公网回调地址。
+此入口独立于现有 Webhook `makePlan`／`deliver`，`NotifyConfig` 不变。**只有自建应用支持长连接；自定义机器人 Webhook 地址和 `secret` 不能用于接收。** WebSocket 仅接收 `im.message.receive_v1` 消息事件，发送／回复／卡片更新走 HTTP API，不支持卡片动作回调，也不需要宿主提供公网回调地址。
 
 先在飞书开放平台完成配置：
 
@@ -190,6 +190,29 @@ const sent = await client.sendMessage({
 
 `client.replyMessage(messageId, {msgType, content, replyInThread?, uuid?})` 同样返回 `{messageId,chatId?}`，`content` 使用相应消息类型的 JSON 字符串；这两个方法不经过消息规划或自动分段。
 
+#### 更新已发送的卡片（0.2.1 起）
+
+`client.updateMessage(messageId: string, content: string): Promise<void>` 按原消息 ID 更新卡片，无需先 `start()`；调用会直接通过 HTTP 联网。例如，宿主保存发送结果中的 `messageId`，之后更新同一条卡片：
+
+```js
+const cardMessage = await client.sendMessage({
+  receiveId: 'oc_EXAMPLE', // 换成宿主验证过的接收人。
+  msgType: 'interactive',
+  content: JSON.stringify({ elements: [{ tag: 'markdown', content: '处理中' }] }),
+});
+await client.updateMessage(cardMessage.messageId, JSON.stringify({
+  elements: [{ tag: 'markdown', content: '处理完成' }],
+})); // 成功返回 undefined，不创建新消息，也不修改接收人。
+```
+
+- 固定调用官方 SDK `im.v1.message.patch({path:{message_id},data:{content}})`；`content` 是卡片 JSON 字符串，不是 Webhook 的 `{msg_type,card}` 包装，也不传 `msgType`、接收人或 `uuid`。
+- 仅用于平台允许更新的、应用已发送的卡片，不是普通文本编辑接口，也不是卡片动作回调接收器。消息归属、权限、可更新时限和卡片格式限制以飞书平台为准；宿主须授权并保存正确的消息 ID。
+- 本地只检查 `messageId`／`content` 为非空白字符串，不解析或验证卡片 schema；原字符串保持不变。无效参数抛安全的 `FeishuError('configuration')`。成功只要求响应 `code === 0`，不要求 `data` 或新的消息 ID。
+- 平台拒绝、网络结果未知或适配器缺少更新能力均抛安全的 `FeishuError`，`operation === 'update'`，只保留安全整数 `code?`；不自动重试、不降级发送／回复。请先核实原消息状态，勿因超时而盲目重发卡片。
+- 自定义 `FeishuAdapter` 可选实现 `updateMessage?(messageId, content): Promise<FeishuApiResponse>`。旧适配器不受影响，但未实现时更新会安全失败；默认 SDK 适配器已实现。生命周期与 HTTP 限制不变，`stop()` 不取消已开始的更新。
+
+参考：[飞书更新应用发送的消息卡片](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/patch)。
+
 官方 MIT 许可 SDK `@larksuiteoapi/node-sdk@1.76.0` 负责应用 token、二进制协议、分帧、心跳和重连；默认不输出 SDK 日志。SDK HTTP 独立配置为 10 秒超时、1 MiB 上限、禁止重定向；**WebSocket 帧不适用 `createTransport` 的 1 MiB JSON 响应保证**，也不通过该传输的 `request`／`fetcher` 注入。
 
 参考：[官方 SDK 长连接接收事件](https://github.com/larksuite/node-sdk#receive-events-by-websocket-connection)。
@@ -198,7 +221,7 @@ const sent = await client.sendMessage({
 
 - 内置传输不把底层 URL、响应原文或网络异常原文放进它生成的安全错误。`NotifyError` 是公共基类，`TransportError`、`HttpError`、`TelegramApiError` 和 `FeishuError` 可按类型处理。自定义翻译／传输及业务回调自身的输出不在此保证内，调用方须自行脱敏。
 - `HttpError.status` 是已解析响应的 HTTP 状态；无效 JSON／UTF-8 等可能先表现为 `TransportError`。不要假设所有 HTTP 401 都必然映射为某一种错误。
-- `FeishuError extends NotifyError`：`operation` 区分 `configuration`／`connection`／`stopped`／`send`／`reply`／`handler`，`code?` 为数值；生成的错误不包含 SDK 原文。消息处理失败会被包装为安全错误，不会把业务回调原异常交给 SDK 或 `onError`。
+- `FeishuError extends NotifyError`：`operation` 区分 `configuration`／`connection`／`stopped`／`send`／`reply`／`update`／`handler`，`code?` 为数值；生成的错误不包含 SDK 原文。消息处理失败会被包装为安全错误，不会把业务回调原异常交给 SDK 或 `onError`。
 - `TelegramApiError` 提供 `code`、`retryAfterSeconds`、`fatal`；`fatal` 只对 401／404／409 为真，是供宿主参考的标记，不会自动退出进程。
 - `createTelegramApi` 默认对一次 429 进行至多一次等待重试，等待阈值为 60 秒；`maxRateLimitWaitSeconds: 0` 关闭内层等待。其余网络失败不自动重发。
 - `deliver` 有自己的策略：Telegram 明确 429 且有效 `retry_after` 在 60 秒内时有限重试；格式兼容回退只处理当前分段；飞书成功分段间等待 250 毫秒。上述回退叠加时不能理解为整个调用只会发生两次 HTTP 请求。

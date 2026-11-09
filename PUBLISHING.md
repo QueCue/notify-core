@@ -49,11 +49,11 @@
 - 测试或仅验证任务成功不表示发布成功。以正式发布任务结果和 registry 状态为准：
 
 ```sh
-npm view @quecue/notify-core@0.2.0 version dist.integrity --json --registry=https://registry.npmjs.org/
+npm view @quecue/notify-core@0.2.1 version dist.integrity --json --registry=https://registry.npmjs.org/
 npm view @quecue/notify-core dist-tags --json --registry=https://registry.npmjs.org/
 ```
 
-应用应声明正常的 npm 运行时依赖，如 `"@quecue/notify-core": "0.2.0"`，在版本可用后更新锁文件并回归；无需保存 vendor tarball、复制通讯运行时或检出兄弟仓库。
+应用应声明正常的 npm 运行时依赖，如 `"@quecue/notify-core": "0.2.1"`，在版本可用后更新锁文件并回归；无需保存 vendor tarball、复制通讯运行时或检出兄弟仓库。
 
 ## 官方参考
 
